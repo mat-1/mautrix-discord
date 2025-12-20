@@ -770,7 +770,7 @@ func (portal *Portal) convertDiscordTextMessage(ctx context.Context, intent *app
 		fullHTML = strings.ReplaceAll(fullHTML, "@room", "@\u2063ro\u2063om")
 	}
 
-	content := format.HTMLToContent(fullHTML)
+	content := format.HTMLToContent(fullHTML, "")
 	extraContent := map[string]any{
 		"com.beeper.linkpreviews": previews,
 	}

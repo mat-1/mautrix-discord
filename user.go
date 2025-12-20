@@ -1277,8 +1277,8 @@ func (user *User) makeReadMarkerContent(eventID id.EventID) *CustomReadMarkers {
 	extra.DoublePuppetSource = user.bridge.Name
 	return &CustomReadMarkers{
 		ReqSetReadMarkers: mautrix.ReqSetReadMarkers{
-			Read:      eventID,
-			FullyRead: eventID,
+			ReadPrivate: eventID,
+			FullyRead:   eventID,
 		},
 		ReadExtra:      extra,
 		FullyReadExtra: extra,

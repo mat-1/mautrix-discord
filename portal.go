@@ -1552,7 +1552,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		edits := portal.bridge.DB.Message.GetByMXID(portal.Key, editMXID)
 		if edits != nil {
 			newContentRaw, _ := evt.Content.Raw["m.new_content"].(map[string]any)
-			discordContent, allowedMentions := portal.parseMatrixHTML(content.NewContent, parseAllowedLinkPreviews(newContentRaw))
+			discordContent, allowedMentions := portal.parseMatrixHTML(content.NewContent, evt.RoomID, parseAllowedLinkPreviews(newContentRaw))
 			var err error
 			var msg *discordgo.Message
 			if !isWebhookSend {
@@ -1631,7 +1631,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 	}
 	switch content.MsgType {
 	case event.MsgText, event.MsgEmote, event.MsgNotice:
-		sendReq.Content, sendReq.AllowedMentions = portal.parseMatrixHTML(content, parseAllowedLinkPreviews(evt.Content.Raw))
+		sendReq.Content, sendReq.AllowedMentions = portal.parseMatrixHTML(content, evt.RoomID, parseAllowedLinkPreviews(evt.Content.Raw))
 		if content.MsgType == event.MsgEmote {
 			sendReq.Content = fmt.Sprintf("_%s_", sendReq.Content)
 		}
@@ -1644,7 +1644,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		filename := content.Body
 		if content.FileName != "" && content.FileName != content.Body {
 			filename = content.FileName
-			sendReq.Content, sendReq.AllowedMentions = portal.parseMatrixHTML(content, parseAllowedLinkPreviews(evt.Content.Raw))
+			sendReq.Content, sendReq.AllowedMentions = portal.parseMatrixHTML(content, evt.RoomID, parseAllowedLinkPreviews(evt.Content.Raw))
 		}
 
 		if evt.Content.Raw["page.codeberg.everypizza.msc4193.spoiler"] == true {

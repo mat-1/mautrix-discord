@@ -100,6 +100,8 @@ const formatterContextAllowedMentionsKey = "fi.mau.discord.allowed_mentions"
 const formatterContextInputAllowedMentionsKey = "fi.mau.discord.input_allowed_mentions"
 const formatterContextInputAllowedLinkPreviewsKey = "fi.mau.discord.input_allowed_link_previews"
 
+const formatterContextRoomIdKey = "dev.matdoes.discord.room_id"
+
 func appendIfNotContains(arr []string, newItem string) []string {
 	for _, item := range arr {
 		if item == newItem {
@@ -239,7 +241,7 @@ var matrixHTMLParser = &format.HTMLParser{
 	},
 }
 
-func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, allowedLinkPreviews []string) (string, *discordgo.MessageAllowedMentions) {
+func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, roomId id.RoomID, allowedLinkPreviews []string) (string, *discordgo.MessageAllowedMentions) {
 	allowedMentions := &discordgo.MessageAllowedMentions{
 		Parse:       []discordgo.AllowedMentionType{},
 		Users:       []string{},
@@ -250,6 +252,7 @@ func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, allowe
 		ctx.ReturnData[formatterContextInputAllowedLinkPreviewsKey] = allowedLinkPreviews
 		ctx.ReturnData[formatterContextPortalKey] = portal
 		ctx.ReturnData[formatterContextAllowedMentionsKey] = allowedMentions
+		ctx.ReturnData[formatterContextRoomIdKey] = roomId
 		if content.Mentions != nil {
 			ctx.ReturnData[formatterContextInputAllowedMentionsKey] = content.Mentions.UserIDs
 		}

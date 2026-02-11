@@ -280,7 +280,20 @@ func (r *discordTagHTMLRenderer) renderDiscordMention(w util.BufWriter, source [
 	case *astDiscordRoleMention:
 		role := node.portal.bridge.DB.Role.GetByID(node.portal.GuildID, strconv.FormatInt(node.id, 10))
 		if role != nil {
-			_, _ = fmt.Fprintf(w, `<font color="#%06x"><strong>@%s</strong></font>`, role.Color, role.Name)
+			var roleColor string
+			// var roleBackgroundColor string
+			if role.Color != 0 {
+				roleColor = fmt.Sprintf("#%06x", role.Color)
+				// 4c for 10% opacity
+				// roleBackgroundColor = fmt.Sprintf("#%06x4c", role.Color)
+			} else {
+				roleColor = "#e3e3e3"
+				// roleColor = "#5865f2"
+				// roleColor = "#5865f2"
+				// rgba(88,101,242,0.3)
+				// roleBackgroundColor = "#5865f24d"
+			}
+			_, _ = fmt.Fprintf(w, `<span data-mx-color="%s"><strong>@%s</strong></span>`, roleColor, role.Name)
 			return
 		}
 	case *astDiscordChannelMention:

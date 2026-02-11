@@ -74,8 +74,23 @@ var discordRendererWithInlineLinks = goldmark.New(
 	fixIndentedParagraphs, format.HTMLOptions, discordExtensions,
 )
 
+var discordMessageRegex = regexp.MustCompile(`\bhttps:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\b`)
+
+func (portal *Portal) replaceDiscordMessageLinks(s string) string {
+	discordMessageId := s[strings.LastIndex(s, "/")+1:]
+
+	matrixMessage := portal.bridge.DB.Message.GetFirstByDiscordID(portal.Key, discordMessageId)
+	if matrixMessage == nil {
+		return s
+	}
+
+	return portal.MXID.EventURI(matrixMessage.MXID).MatrixToURL()
+}
+
 func (portal *Portal) renderDiscordMarkdownOnlyHTMLNoUnwrap(text string, allowInlineLinks bool) string {
 	text = escapeFixer.ReplaceAllStringFunc(text, escapeReplacement)
+	// convert discord.com/channels/ links to matrix.to ones
+	text = discordMessageRegex.ReplaceAllStringFunc(text, portal.replaceDiscordMessageLinks)
 
 	var buf strings.Builder
 	ctx := parser.NewContext()
@@ -88,6 +103,7 @@ func (portal *Portal) renderDiscordMarkdownOnlyHTMLNoUnwrap(text string, allowIn
 	if err != nil {
 		panic(fmt.Errorf("markdown parser errored: %w", err))
 	}
+
 	return buf.String()
 }
 
@@ -182,7 +198,12 @@ var discordMarkdownEscaper = strings.NewReplacer(
 	`#`, `\#`,
 )
 
-func escapeDiscordMarkdown(s string) string {
+func escapeDiscordMarkdown(s string, portal *Portal) string {
+	if portal != nil {
+		// convert matrix.to links to discord.com/channels/ ones
+		s = matrixMessageRegex.ReplaceAllStringFunc(s, portal.replaceMatrixMessageLinks)
+	}
+
 	submatches := discordLinkRegex.FindAllStringIndex(s, -1)
 	if submatches == nil {
 		return discordMarkdownEscaper.Replace(s)
@@ -200,6 +221,22 @@ func escapeDiscordMarkdown(s string) string {
 	return builder.String()
 }
 
+var matrixMessageRegex = regexp.MustCompile(`https:\/\/matrix\.to\/#\/([\w:.!]+)\/(\$[\w-]+)(\?[^\s]*)`)
+
+func (portal *Portal) replaceMatrixMessageLinks(s string) string {
+	result := matrixMessageRegex.FindStringSubmatch(s)
+	messageMxid := result[2]
+
+	discordMessage := portal.bridge.DB.Message.GetByMXID(portal.Key, id.EventID(messageMxid))
+
+	if discordMessage == nil {
+		return s
+	}
+
+	// https://discord.com/channels/868384111616737291/1313307078084923402/1471219876960932043
+	return `https://discord.com/channels/` + portal.GuildID + `/` + discordMessage.Channel.ChannelID + `/` + discordMessage.DiscordID
+}
+
 var matrixHTMLParser = &format.HTMLParser{
 	TabsToSpaces:   4,
 	Newline:        "\n",
@@ -215,7 +252,10 @@ var matrixHTMLParser = &format.HTMLParser{
 			// If we're in a code block, don't escape markdown
 			return s
 		}
-		return escapeDiscordMarkdown(s)
+
+		portal := ctx.ReturnData[formatterContextPortalKey].(*Portal)
+
+		return escapeDiscordMarkdown(s, portal)
 	},
 	SpoilerConverter: func(text, reason string, ctx format.Context) string {
 		if reason != "" {
@@ -224,6 +264,10 @@ var matrixHTMLParser = &format.HTMLParser{
 		return fmt.Sprintf("||%s||", text)
 	},
 	LinkConverter: func(text, href string, ctx format.Context) string {
+		// convert matrix.to links to discord.com/channels/ ones
+		portal := ctx.ReturnData[formatterContextPortalKey].(*Portal)
+		href = matrixMessageRegex.ReplaceAllStringFunc(href, portal.replaceMatrixMessageLinks)
+
 		linkPreviews := ctx.ReturnData[formatterContextInputAllowedLinkPreviewsKey].([]string)
 		allowPreview := linkPreviews == nil || slices.Contains(linkPreviews, href)
 		if text == href {
@@ -232,11 +276,11 @@ var matrixHTMLParser = &format.HTMLParser{
 			}
 			return text
 		} else if !discordLinkRegexFull.MatchString(href) {
-			return fmt.Sprintf("%s (%s)", escapeDiscordMarkdown(text), escapeDiscordMarkdown(href))
+			return fmt.Sprintf("%s (%s)", escapeDiscordMarkdown(text, portal), escapeDiscordMarkdown(href, portal))
 		} else if !allowPreview {
-			return fmt.Sprintf("[%s](<%s>)", escapeDiscordMarkdown(text), href)
+			return fmt.Sprintf("[%s](<%s>)", escapeDiscordMarkdown(text, portal), href)
 		} else {
-			return fmt.Sprintf("[%s](%s)", escapeDiscordMarkdown(text), href)
+			return fmt.Sprintf("[%s](%s)", escapeDiscordMarkdown(text, portal), href)
 		}
 	},
 }
@@ -258,6 +302,6 @@ func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, roomId
 		}
 		return variationselector.FullyQualify(matrixHTMLParser.Parse(content.FormattedBody, ctx)), allowedMentions
 	} else {
-		return variationselector.FullyQualify(escapeDiscordMarkdown(content.Body)), allowedMentions
+		return variationselector.FullyQualify(escapeDiscordMarkdown(content.Body, portal)), allowedMentions
 	}
 }

@@ -1501,7 +1501,7 @@ func (portal *Portal) convertReplyMessageToEmbed(eventID id.EventID, url string)
 	} else {
 		targetUser = evt.Sender.String()
 	}
-	body := escapeDiscordMarkdown(cutBody(content.Body))
+	body := escapeDiscordMarkdown(cutBody(content.Body), portal)
 	body = fmt.Sprintf("**[Replying to](%s) %s**\n%s", url, targetUser, body)
 	embed := &discordgo.MessageEmbed{Description: body}
 	return embed, nil

@@ -1480,14 +1480,14 @@ func cutBody(body string) string {
 	return output
 }
 
-func (portal *Portal) convertReplyMessageToEmbed(eventID id.EventID, url string) (*discordgo.MessageEmbed, error) {
+func (portal *Portal) convertReplyMessageToPrefix(eventID id.EventID, url string) (string, error) {
 	evt, err := portal.getEvent(eventID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get reply target event: %w", err)
+		return "", fmt.Errorf("failed to get reply target event: %w", err)
 	}
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
 	if !ok {
-		return nil, fmt.Errorf("unsupported event type %s / %T", evt.Type.String(), evt.Content.Parsed)
+		return "", fmt.Errorf("unsupported event type %s / %T", evt.Type.String(), evt.Content.Parsed)
 	}
 	content.RemoveReplyFallback()
 	var targetUser string
@@ -1499,13 +1499,26 @@ func (portal *Portal) convertReplyMessageToEmbed(eventID id.EventID, url string)
 		targetUser = fmt.Sprintf("<@%s>", user.DiscordID)
 	} else if member := portal.bridge.StateStore.GetMember(portal.MXID, evt.Sender); member != nil && member.Displayname != "" {
 		targetUser = member.Displayname
+		targetUser = strings.ReplaceAll(targetUser, "@", "@\u200c")
 	} else {
 		targetUser = evt.Sender.String()
+		targetUser = strings.ReplaceAll(targetUser, "@", "@\u200c")
 	}
-	body := escapeDiscordMarkdown(cutBody(content.Body), portal)
-	body = fmt.Sprintf("**[Replying to](%s) %s**\n%s", url, targetUser, body)
-	embed := &discordgo.MessageEmbed{Description: body}
-	return embed, nil
+	replyingToBody := escapeDiscordMarkdown(cutBody(content.Body), portal)
+	replyingToBody = strings.ReplaceAll(replyingToBody, "\n", " ")
+	replyingToBody = strings.ReplaceAll(replyingToBody, "@", "@\u200c")
+
+	// reply styling borrowed from https://gitdab.com/cadence/out-of-your-element
+	body := "-# > "
+	body += "<:L1:1477111628947394671><:L2:1477111608504356914> "
+	body += url
+	body += " "
+	body += targetUser
+	body += ": "
+	body += replyingToBody
+	body += "\n"
+
+	return body, nil
 }
 
 func (portal *Portal) RefererOpt(threadID string) discordgo.RequestOption {
@@ -1608,28 +1621,6 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		}
 	}
 
-	replyToMXID := content.RelatesTo.GetNonFallbackReplyTo()
-	var replyToUser id.UserID
-	if replyToMXID != "" {
-		replyTo := portal.bridge.DB.Message.GetByMXID(portal.Key, replyToMXID)
-		if replyTo != nil && replyTo.ThreadID == threadID {
-			replyToUser = replyTo.SenderMXID
-			if isWebhookSend {
-				messageURL := fmt.Sprintf("https://discord.com/channels/%s/%s/%s", portal.GuildID, channelID, replyTo.DiscordID)
-				embed, err := portal.convertReplyMessageToEmbed(replyTo.MXID, messageURL)
-				if err != nil {
-					portal.log.Warn().Err(err).Msg("Failed to convert reply message to embed for webhook send")
-				} else if embed != nil {
-					sendReq.Embeds = []*discordgo.MessageEmbed{embed}
-				}
-			} else {
-				sendReq.Reference = &discordgo.MessageReference{
-					ChannelID: channelID,
-					MessageID: replyTo.DiscordID,
-				}
-			}
-		}
-	}
 	switch content.MsgType {
 	case event.MsgText, event.MsgEmote, event.MsgNotice:
 		sendReq.Content, sendReq.AllowedMentions = portal.parseMatrixHTML(content, evt.RoomID, parseAllowedLinkPreviews(evt.Content.Raw))
@@ -1693,6 +1684,30 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		go portal.sendMessageMetrics(evt, fmt.Errorf("%w %q", errUnknownMsgType, content.MsgType), "Ignoring")
 		return
 	}
+
+	replyToMXID := content.RelatesTo.GetNonFallbackReplyTo()
+	var replyToUser id.UserID
+	if replyToMXID != "" {
+		replyTo := portal.bridge.DB.Message.GetByMXID(portal.Key, replyToMXID)
+		if replyTo != nil && replyTo.ThreadID == threadID {
+			replyToUser = replyTo.SenderMXID
+			if isWebhookSend {
+				messageURL := fmt.Sprintf("https://discord.com/channels/%s/%s/%s", portal.GuildID, channelID, replyTo.DiscordID)
+				prefix, err := portal.convertReplyMessageToPrefix(replyTo.MXID, messageURL)
+				if err != nil {
+					portal.log.Warn().Err(err).Msg("Failed to convert reply message to embed for webhook send")
+				} else if prefix != "" {
+					sendReq.Content = prefix + sendReq.Content
+				}
+			} else {
+				sendReq.Reference = &discordgo.MessageReference{
+					ChannelID: channelID,
+					MessageID: replyTo.DiscordID,
+				}
+			}
+		}
+	}
+
 	silentReply := content.Mentions != nil && replyToMXID != "" &&
 		(len(content.Mentions.UserIDs) == 0 || (replyToUser != "" && !slices.Contains(content.Mentions.UserIDs, replyToUser)))
 	if silentReply && sendReq.AllowedMentions != nil {
@@ -1719,6 +1734,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 			sendReq.AllowedMentions.Parse = append(sendReq.AllowedMentions.Parse, discordgo.AllowedMentionTypeEveryone)
 		}
 	}
+
 	sendReq.Nonce = generateNonce()
 	var msg *discordgo.Message
 	var err error

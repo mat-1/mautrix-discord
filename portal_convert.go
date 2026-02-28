@@ -283,9 +283,22 @@ func (portal *Portal) convertDiscordMessage(ctx context.Context, puppet *Puppet,
 	if textPart := portal.convertDiscordTextMessage(ctx, intent, msg); textPart != nil {
 		parts = append(parts, textPart)
 	}
+
+	var forwardedMsg *discordgo.Message = nil
+	if msg.MessageReference != nil &&
+		msg.MessageReference.Type == discordgo.MessageReferenceTypeForward &&
+		len(msg.MessageSnapshots) > 0 &&
+		msg.MessageSnapshots[0].Message != nil {
+		forwardedMsg = msg.MessageSnapshots[0].Message
+	}
+
+	attachments := msg.Attachments
+	if forwardedMsg != nil {
+		attachments = append(attachments, forwardedMsg.Attachments...)
+	}
 	log := zerolog.Ctx(ctx)
 	handledIDs := make(map[string]struct{})
-	for _, att := range msg.Attachments {
+	for _, att := range attachments {
 		if _, handled := handledIDs[att.ID]; handled {
 			continue
 		}
@@ -294,6 +307,10 @@ func (portal *Portal) convertDiscordMessage(ctx context.Context, puppet *Puppet,
 		if part := portal.convertDiscordAttachment(log.WithContext(ctx), intent, msg.ID, att); part != nil {
 			parts = append(parts, part)
 		}
+	}
+	stickers := msg.StickerItems
+	if forwardedMsg != nil {
+		stickers = append(stickers, forwardedMsg.StickerItems...)
 	}
 	for _, sticker := range msg.StickerItems {
 		if _, handled := handledIDs[sticker.ID]; handled {
@@ -305,7 +322,11 @@ func (portal *Portal) convertDiscordMessage(ctx context.Context, puppet *Puppet,
 			parts = append(parts, part)
 		}
 	}
-	for i, embed := range msg.Embeds {
+	embeds := msg.Embeds
+	if forwardedMsg != nil {
+		embeds = append(embeds, forwardedMsg.Embeds...)
+	}
+	for i, embed := range embeds {
 		// Ignore non-video embeds, they're handled in convertDiscordTextMessage
 		if getEmbedType(msg, embed) != EmbedVideo {
 			continue
@@ -707,8 +728,11 @@ func (portal *Portal) convertDiscordTextMessage(ctx context.Context, intent *app
 		msg.MessageReference.Type == discordgo.MessageReferenceTypeForward &&
 		len(msg.MessageSnapshots) > 0 &&
 		msg.MessageSnapshots[0].Message != nil {
-		forwardedHTML := portal.renderDiscordMarkdownOnlyHTMLNoUnwrap(msg.MessageSnapshots[0].Message.Content, true)
-		msgTSText := msg.MessageSnapshots[0].Message.Timestamp.Format("2006-01-02 15:04 MST")
+		
+		forwardedMsg := msg.MessageSnapshots[0].Message
+
+		forwardedHTML := portal.renderDiscordMarkdownOnlyHTMLNoUnwrap(forwardedMsg.Content, true)
+		msgTSText := forwardedMsg.Timestamp.Format("2006-01-02 15:04 MST")
 		origLink := fmt.Sprintf("unknown channel • %s", msgTSText)
 		forwardedFromPortal := portal.bridge.GetExistingPortalByID(database.NewPortalKey(msg.MessageReference.ChannelID, ""))
 		if forwardedFromPortal != nil {

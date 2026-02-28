@@ -1122,6 +1122,7 @@ func generateNonce() string {
 
 func (portal *Portal) getEvent(mxid id.EventID) (*event.Event, error) {
 	evt, err := portal.MainIntent().GetEvent(portal.MXID, mxid)
+
 	if err != nil {
 		return nil, err
 	}

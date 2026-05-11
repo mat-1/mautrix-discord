@@ -1528,17 +1528,27 @@ func (portal *Portal) RefererOptIfUser(sess *discordgo.Session, threadID string)
 }
 
 func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
+	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
+	if !ok {
+		go portal.sendMessageMetrics(evt, fmt.Errorf("%w %T", errUnexpectedParsedContentType, evt.Content.Parsed), "Ignoring")
+		return
+	}
+
+	channelID := portal.Key.ChannelID
+	sess := sender.Session
+	if sess == nil && portal.RelayWebhookID == "" {
+		go portal.sendMessageMetrics(evt, errUserNotLoggedIn, "Ignoring")
+		return
+	}
+	isWebhookSend := sess == nil
+
 	if portal.IsPrivateChat() {
-		if !sender.IsLoggedIn() {
-			go portal.sendMessageMetrics(evt, errUserNotLoggedIn, "Ignoring")
-			return
-		}
 		if sender.DiscordID != portal.Key.Receiver {
 			go portal.sendMessageMetrics(evt, errUserNotReceiver, "Ignoring")
 			return
 		}
 
-		if portal.bridge.Config.Bridge.ForbidDMingStrangers {
+		if portal.bridge.Config.Bridge.ForbidDMingStrangers && sess.IsUser {
 			recipient := portal.bridge.GetPuppetByID(portal.OtherUserID)
 
 			if !recipient.IsBot {
@@ -1558,20 +1568,6 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 			}
 		}
 	}
-
-	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
-	if !ok {
-		go portal.sendMessageMetrics(evt, fmt.Errorf("%w %T", errUnexpectedParsedContentType, evt.Content.Parsed), "Ignoring")
-		return
-	}
-
-	channelID := portal.Key.ChannelID
-	sess := sender.Session
-	if sess == nil && portal.RelayWebhookID == "" {
-		go portal.sendMessageMetrics(evt, errUserNotLoggedIn, "Ignoring")
-		return
-	}
-	isWebhookSend := sess == nil
 	var threadID string
 
 	if editMXID := content.GetRelatesTo().GetReplaceID(); editMXID != "" && content.NewContent != nil {

@@ -1227,6 +1227,8 @@ var (
 	errUnknownRelationType         = errors.New("unknown relation type")
 	errTargetNotFound              = errors.New("target event not found")
 	errUnknownEmoji                = errors.New("unknown emoji")
+	errRelationshipsNotReady       = errors.New("can't direct message before receiving relationships")
+	errDMingStranger               = errors.New("can't direct message a stranger")
 	errCantStartThread             = errors.New("can't create thread without being logged into Discord")
 )
 
@@ -1242,6 +1244,10 @@ func errorToStatusReason(err error) (reason event.MessageStatusReason, status ev
 		errors.Is(err, attachment.UnsupportedAlgorithm),
 		errors.Is(err, errCantStartThread):
 		return event.MessageStatusUnsupported, event.MessageStatusFail, true, true, "", nil
+	case errors.Is(err, errDMingStranger):
+		return event.MessageStatusGenericError, event.MessageStatusFail, true, true, "You can't message users who aren't on your friends list. Use the Discord app to chat or add them as a friend to continue.", nil
+	case errors.Is(err, errRelationshipsNotReady):
+		return event.MessageStatusGenericError, event.MessageStatusRetriable, true, true, "Still syncing your Discord friends list, please try again in a moment.", nil
 	case errors.Is(err, attachment.HashMismatch),
 		errors.Is(err, attachment.InvalidKey),
 		errors.Is(err, attachment.InvalidInitVector):
@@ -1536,17 +1542,6 @@ func (portal *Portal) RefererOptIfUser(sess *discordgo.Session, threadID string)
 }
 
 func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
-	if portal.IsPrivateChat() {
-		if !sender.IsLoggedIn() {
-			go portal.sendMessageMetrics(evt, errUserNotLoggedIn, "Ignoring")
-			return
-		}
-		if sender.DiscordID != portal.Key.Receiver {
-			go portal.sendMessageMetrics(evt, errUserNotReceiver, "Ignoring")
-			return
-		}
-	}
-
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
 	if !ok {
 		go portal.sendMessageMetrics(evt, fmt.Errorf("%w %T", errUnexpectedParsedContentType, evt.Content.Parsed), "Ignoring")
@@ -1560,6 +1555,33 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		return
 	}
 	isWebhookSend := sess == nil
+
+	if portal.IsPrivateChat() {
+		if sender.DiscordID != portal.Key.Receiver {
+			go portal.sendMessageMetrics(evt, errUserNotReceiver, "Ignoring")
+			return
+		}
+
+		if portal.bridge.Config.Bridge.ForbidDMingStrangers && sess.IsUser {
+			recipient := portal.bridge.GetPuppetByID(portal.OtherUserID)
+
+			if !recipient.IsBot {
+				sender.relationshipLock.RLock()
+				if !sender.relationshipsReady {
+					go portal.sendMessageMetrics(evt, errRelationshipsNotReady, "")
+					sender.relationshipLock.RUnlock()
+					return
+				}
+				relationship, hasRelationship := sender.relationships[portal.OtherUserID]
+				sender.relationshipLock.RUnlock()
+
+				if !hasRelationship || relationship.Type != discordgo.RelationshipFriend {
+					go portal.sendMessageMetrics(evt, errDMingStranger, "")
+					return
+				}
+			}
+		}
+	}
 	var threadID string
 
 	if editMXID := content.GetRelatesTo().GetReplaceID(); editMXID != "" && content.NewContent != nil {
@@ -1579,7 +1601,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 				})
 			}
 			go portal.sendMessageMetrics(evt, err, "Failed to edit")
-			if msg.EditedTimestamp != nil {
+			if msg != nil && msg.EditedTimestamp != nil {
 				edits.UpdateEditTimestamp(*msg.EditedTimestamp)
 			}
 		} else {
@@ -2558,6 +2580,7 @@ func (portal *Portal) UpdateInfo(source *User, meta *discordgo.Channel) *discord
 		if portal.OtherUserID != "" {
 			puppet := portal.bridge.GetPuppetByID(portal.OtherUserID)
 			changed = portal.UpdateAvatarFromPuppet(puppet) || changed
+			source.relationshipLock.RLock()
 			if rel, ok := source.relationships[portal.OtherUserID]; ok && rel.Nickname != "" {
 				portal.FriendNick = true
 				changed = portal.UpdateNameDirect(rel.Nickname, true) || changed
@@ -2565,6 +2588,7 @@ func (portal *Portal) UpdateInfo(source *User, meta *discordgo.Channel) *discord
 				portal.FriendNick = false
 				changed = portal.UpdateNameDirect(puppet.Name, false) || changed
 			}
+			source.relationshipLock.RUnlock()
 		}
 		if portal.MXID != "" {
 			portal.syncParticipants(source, meta.Recipients)

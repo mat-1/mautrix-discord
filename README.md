@@ -1,8 +1,8 @@
 My personal fork of mautrix-discord with some potentially unstable patches.
 
 ## Additions
-- **Discord<->Matrix**: `discord.com/channels/` and `matrix.to` links are now bridged.
-- **Matrix->Discord**: Replies are now prettier (stolen from [Out Of Your Element](https://gitdab.com/cadence/out-of-your-element) &lt;3).
+- **Discord<->Matrix**: `discord.com/channels/` and `matrix.to` links are now translated to each other.
+- **Matrix->Discord**: Webhook replies are now prettier (stolen from [Out Of Your Element](https://gitdab.com/cadence/out-of-your-element) &lt;3).
 
 ## Fixes
 - **Discord->Matrix**: Read receipts are now private instead of public.

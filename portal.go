@@ -1486,6 +1486,8 @@ func cutBody(body string) string {
 	return output
 }
 
+var linkRegex = regexp.MustCompile(`https?:\/\/[-a-zA-Z0-9()@:%_\+.~#?&//=]+`)
+
 func (portal *Portal) convertReplyMessageToPrefix(eventID id.EventID, url string) (string, error) {
 	evt, err := portal.getEvent(eventID)
 	if err != nil {
@@ -1511,6 +1513,7 @@ func (portal *Portal) convertReplyMessageToPrefix(eventID id.EventID, url string
 		targetUser = strings.ReplaceAll(targetUser, "@", "@\u200c")
 	}
 	replyingToBody := escapeDiscordMarkdown(cutBody(content.Body), portal)
+	replyingToBody = linkRegex.ReplaceAllString(replyingToBody, `<$0>`)
 	replyingToBody = strings.ReplaceAll(replyingToBody, "\n", " ")
 	replyingToBody = strings.ReplaceAll(replyingToBody, "@", "@\u200c")
 

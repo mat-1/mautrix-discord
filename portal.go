@@ -1488,8 +1488,10 @@ func cutBody(body string) string {
 
 var linkRegex = regexp.MustCompile(`https?:\/\/[-a-zA-Z0-9()@:%_\+.~#?&//=]+`)
 
-func (portal *Portal) convertReplyMessageToPrefix(eventID id.EventID, url string) (string, error) {
-	evt, err := portal.getEvent(eventID)
+func (portal *Portal) convertReplyMessageToPrefix(replyTo *database.Message) (string, error) {
+	url := fmt.Sprintf("https://discord.com/channels/%s/%s/%s", portal.GuildID, portal.Key.ChannelID, replyTo.DiscordID)
+
+	evt, err := portal.getEvent(replyTo.MXID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get reply target event: %w", err)
 	}
@@ -1587,28 +1589,67 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 	}
 	var threadID string
 
-	if editMXID := content.GetRelatesTo().GetReplaceID(); editMXID != "" && content.NewContent != nil {
-		edits := portal.bridge.DB.Message.GetByMXID(portal.Key, editMXID)
-		if edits != nil {
-			newContentRaw, _ := evt.Content.Raw["m.new_content"].(map[string]any)
-			discordContent, allowedMentions := portal.parseMatrixHTML(content.NewContent, evt.RoomID, parseAllowedLinkPreviews(newContentRaw))
-			var err error
-			var msg *discordgo.Message
-			if !isWebhookSend {
-				// TODO save edit in message table
-				msg, err = sess.ChannelMessageEdit(edits.DiscordProtoChannelID(), edits.DiscordID, discordContent)
-			} else {
-				msg, err = relayClient.WebhookMessageEdit(portal.RelayWebhookID, portal.RelayWebhookSecret, edits.DiscordID, &discordgo.WebhookEdit{
-					Content:         &discordContent,
-					AllowedMentions: allowedMentions,
-				})
-			}
-			go portal.sendMessageMetrics(evt, err, "Failed to edit")
-			if msg != nil && msg.EditedTimestamp != nil {
-				edits.UpdateEditTimestamp(*msg.EditedTimestamp)
-			}
-		} else {
+	editMXID := content.GetRelatesTo().GetReplaceID()
+	var edits *database.Message
+	if editMXID != "" {
+		portal.log.Warn().Msg("b")
+		edits = portal.bridge.DB.Message.GetByMXID(portal.Key, editMXID)
+
+		if edits == nil {
 			go portal.sendMessageMetrics(evt, fmt.Errorf("%w %s", errUnknownEditTarget, editMXID), "Ignoring")
+			return
+		}
+	}
+
+	replyToMXID := content.GetRelatesTo().GetNonFallbackReplyTo()
+	if replyToMXID == "" && edits != nil {
+		// edited messages typically don't include the message that was replied
+		// to in the new event, so we have to save that ourselves in our
+		// database
+		replyToMXID = edits.ReplyToMXID
+		portal.log.Warn().Msg(fmt.Sprintf("new replyToMXID: %v", replyToMXID))
+	}
+	var replyTo *database.Message
+	var replyToUser id.UserID
+	if replyToMXID != "" {
+		replyTo = portal.bridge.DB.Message.GetByMXID(portal.Key, replyToMXID)
+		replyToUser = replyTo.SenderMXID
+	}
+
+	portal.log.Warn().Msg("a")
+
+	if editMXID != "" && content.NewContent != nil && edits != nil {
+		portal.log.Warn().Msg("b")
+
+		portal.log.Warn().Msg("c")
+		newContentRaw, _ := evt.Content.Raw["m.new_content"].(map[string]any)
+		discordContent, allowedMentions := portal.parseMatrixHTML(content.NewContent, evt.RoomID, parseAllowedLinkPreviews(newContentRaw))
+		var err error
+		var msg *discordgo.Message
+		// TODO save edit in message table
+		if !isWebhookSend {
+			msg, err = sess.ChannelMessageEdit(edits.DiscordProtoChannelID(), edits.DiscordID, discordContent)
+		} else {
+			portal.log.Warn().Msg(fmt.Sprintf("d %+v || %+v", replyTo, threadID))
+			if replyTo != nil && replyTo.ThreadID == threadID {
+				portal.log.Warn().Msg("e")
+				prefix, err := portal.convertReplyMessageToPrefix(replyTo)
+				if err != nil {
+					portal.log.Warn().Err(err).Msg("Failed to convert reply message to embed for webhook edit")
+				} else if prefix != "" {
+					portal.log.Warn().Msg("f")
+					discordContent = prefix + discordContent
+				}
+			}
+
+			msg, err = relayClient.WebhookMessageEdit(portal.RelayWebhookID, portal.RelayWebhookSecret, edits.DiscordID, &discordgo.WebhookEdit{
+				Content:         &discordContent,
+				AllowedMentions: allowedMentions,
+			})
+		}
+		go portal.sendMessageMetrics(evt, err, "Failed to edit")
+		if msg != nil && msg.EditedTimestamp != nil {
+			edits.UpdateEditTimestamp(*msg.EditedTimestamp)
 		}
 		return
 	} else if threadRoot := content.GetRelatesTo().GetThreadParent(); threadRoot != "" {
@@ -1710,25 +1751,18 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		return
 	}
 
-	replyToMXID := content.RelatesTo.GetNonFallbackReplyTo()
-	var replyToUser id.UserID
-	if replyToMXID != "" {
-		replyTo := portal.bridge.DB.Message.GetByMXID(portal.Key, replyToMXID)
-		if replyTo != nil && replyTo.ThreadID == threadID {
-			replyToUser = replyTo.SenderMXID
-			if isWebhookSend {
-				messageURL := fmt.Sprintf("https://discord.com/channels/%s/%s/%s", portal.GuildID, channelID, replyTo.DiscordID)
-				prefix, err := portal.convertReplyMessageToPrefix(replyTo.MXID, messageURL)
-				if err != nil {
-					portal.log.Warn().Err(err).Msg("Failed to convert reply message to embed for webhook send")
-				} else if prefix != "" {
-					sendReq.Content = prefix + sendReq.Content
-				}
-			} else {
-				sendReq.Reference = &discordgo.MessageReference{
-					ChannelID: channelID,
-					MessageID: replyTo.DiscordID,
-				}
+	if replyTo != nil && replyTo.ThreadID == threadID {
+		if isWebhookSend {
+			prefix, err := portal.convertReplyMessageToPrefix(replyTo)
+			if err != nil {
+				portal.log.Warn().Err(err).Msg("Failed to convert reply message to embed for webhook send")
+			} else if prefix != "" {
+				sendReq.Content = prefix + sendReq.Content
+			}
+		} else {
+			sendReq.Reference = &discordgo.MessageReference{
+				ChannelID: channelID,
+				MessageID: replyTo.DiscordID,
 			}
 		}
 	}
@@ -1795,6 +1829,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		dbMsg.SenderMXID = sender.MXID
 		dbMsg.Timestamp, _ = discordgo.SnowflakeTimestamp(msg.ID)
 		dbMsg.ThreadID = threadID
+		dbMsg.ReplyToMXID = content.RelatesTo.GetReplyTo()
 		dbMsg.Insert()
 	}
 }

@@ -285,8 +285,8 @@ var matrixHTMLParser = &format.HTMLParser{
 	},
 }
 
-func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, roomId id.RoomID, allowedLinkPreviews []string) (string, *discordgo.MessageAllowedMentions) {
-	allowedMentions := &discordgo.MessageAllowedMentions{
+func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, roomId id.RoomID, allowedLinkPreviews []string) (discordContent string, allowedMentions *discordgo.MessageAllowedMentions) {
+	allowedMentions = &discordgo.MessageAllowedMentions{
 		Parse:       []discordgo.AllowedMentionType{},
 		Users:       []string{},
 		RepliedUser: true,
@@ -300,8 +300,10 @@ func (portal *Portal) parseMatrixHTML(content *event.MessageEventContent, roomId
 		if content.Mentions != nil {
 			ctx.ReturnData[formatterContextInputAllowedMentionsKey] = content.Mentions.UserIDs
 		}
-		return variationselector.FullyQualify(matrixHTMLParser.Parse(content.FormattedBody, ctx)), allowedMentions
+		discordContent = variationselector.FullyQualify(matrixHTMLParser.Parse(content.FormattedBody, ctx))
 	} else {
-		return variationselector.FullyQualify(escapeDiscordMarkdown(content.Body, portal)), allowedMentions
+		discordContent = variationselector.FullyQualify(escapeDiscordMarkdown(content.Body, portal))
 	}
+
+	return
 }

@@ -18,7 +18,7 @@ type MessageQuery struct {
 }
 
 const (
-	messageSelect = "SELECT dcid, dc_attachment_id, dc_chan_id, dc_chan_receiver, dc_sender, timestamp, dc_edit_timestamp, dc_thread_id, mxid, sender_mxid FROM message"
+	messageSelect = "SELECT dcid, dc_attachment_id, dc_chan_id, dc_chan_receiver, dc_sender, timestamp, dc_edit_timestamp, dc_thread_id, mxid, sender_mxid, reply_to_mxid FROM message"
 )
 
 func (mq *MessageQuery) New() *Message {
@@ -137,8 +137,9 @@ type Message struct {
 	EditTimestamp time.Time
 	ThreadID      string
 
-	MXID       id.EventID
-	SenderMXID id.UserID
+	MXID        id.EventID
+	SenderMXID  id.UserID
+	ReplyToMXID id.EventID
 }
 
 func (m *Message) DiscordProtoChannelID() string {
@@ -152,7 +153,7 @@ func (m *Message) DiscordProtoChannelID() string {
 func (m *Message) Scan(row dbutil.Scannable) *Message {
 	var ts, editTS int64
 
-	err := row.Scan(&m.DiscordID, &m.AttachmentID, &m.Channel.ChannelID, &m.Channel.Receiver, &m.SenderID, &ts, &editTS, &m.ThreadID, &m.MXID, &m.SenderMXID)
+	err := row.Scan(&m.DiscordID, &m.AttachmentID, &m.Channel.ChannelID, &m.Channel.Receiver, &m.SenderID, &ts, &editTS, &m.ThreadID, &m.MXID, &m.SenderMXID, &m.ReplyToMXID)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			m.log.Errorln("Database scan failed:", err)
@@ -174,12 +175,12 @@ func (m *Message) Scan(row dbutil.Scannable) *Message {
 
 const messageInsertQuery = `
 	INSERT INTO message (
-		dcid, dc_attachment_id, dc_chan_id, dc_chan_receiver, dc_sender, timestamp, dc_edit_timestamp, dc_thread_id, mxid, sender_mxid
+		dcid, dc_attachment_id, dc_chan_id, dc_chan_receiver, dc_sender, timestamp, dc_edit_timestamp, dc_thread_id, mxid, sender_mxid, reply_to_mxid
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
-var messageMassInsertTemplate = strings.Replace(messageInsertQuery, "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)", "%s", 1)
+var messageMassInsertTemplate = strings.Replace(messageInsertQuery, "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", "%s", 1)
 
 type MessagePart struct {
 	AttachmentID string
@@ -197,11 +198,11 @@ func (m *Message) MassInsertParts(msgs []MessagePart) {
 	if len(msgs) == 0 {
 		return
 	}
-	valueStringFormat := "($1, $%d, $2, $3, $4, $5, $6, $7, $%d, $8)"
+	valueStringFormat := "($1, $%d, $2, $3, $4, $5, $6, $7, $%d, $8, $9)"
 	if m.db.Dialect == dbutil.SQLite {
 		valueStringFormat = strings.ReplaceAll(valueStringFormat, "$", "?")
 	}
-	params := make([]interface{}, 8+len(msgs)*2)
+	params := make([]interface{}, 9+len(msgs)*2)
 	placeholders := make([]string, len(msgs))
 	params[0] = m.DiscordID
 	params[1] = m.Channel.ChannelID
@@ -211,10 +212,11 @@ func (m *Message) MassInsertParts(msgs []MessagePart) {
 	params[5] = m.editTimestampVal()
 	params[6] = m.ThreadID
 	params[7] = m.SenderMXID.String()
+	params[8] = m.ReplyToMXID
 	for i, msg := range msgs {
-		params[8+i*2] = msg.AttachmentID
-		params[8+i*2+1] = msg.MXID
-		placeholders[i] = fmt.Sprintf(valueStringFormat, 8+i*2+1, 8+i*2+2)
+		params[9+i*2] = msg.AttachmentID
+		params[9+i*2+1] = msg.MXID
+		placeholders[i] = fmt.Sprintf(valueStringFormat, 9+i*2+1, 9+i*2+2)
 	}
 	_, err := m.db.Exec(fmt.Sprintf(messageMassInsertTemplate, strings.Join(placeholders, ", ")), params...)
 	if err != nil {
@@ -226,7 +228,7 @@ func (m *Message) MassInsertParts(msgs []MessagePart) {
 func (m *Message) Insert() {
 	_, err := m.db.Exec(messageInsertQuery,
 		m.DiscordID, m.AttachmentID, m.Channel.ChannelID, m.Channel.Receiver, m.SenderID,
-		m.Timestamp.UnixMilli(), m.editTimestampVal(), m.ThreadID, m.MXID, m.SenderMXID.String())
+		m.Timestamp.UnixMilli(), m.editTimestampVal(), m.ThreadID, m.MXID, m.SenderMXID.String(), m.ReplyToMXID)
 
 	if err != nil {
 		m.log.Warnfln("Failed to insert %s@%s: %v", m.DiscordID, m.Channel, err)

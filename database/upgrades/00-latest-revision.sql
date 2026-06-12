@@ -120,6 +120,7 @@ CREATE TABLE message (
     mxid          TEXT NOT NULL UNIQUE,
     sender_mxid   TEXT NOT NULL DEFAULT '',
     reply_to_mxid TEXT NOT NULL DEFAULT '',
+    replaced_by_mxid TEXT NOT NULL DEFAULT '',
 
     PRIMARY KEY (dcid, dc_attachment_id, dc_chan_id, dc_chan_receiver),
     CONSTRAINT message_portal_fkey FOREIGN KEY (dc_chan_id, dc_chan_receiver) REFERENCES portal (dcid, receiver) ON DELETE CASCADE

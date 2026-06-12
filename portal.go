@@ -949,7 +949,7 @@ func (portal *Portal) handleDiscordMessageUpdate(user *User, msg *discordgo.Mess
 	portal.sendDeliveryReceipt(resp.EventID)
 
 	if msg.EditedTimestamp != nil {
-		existing[0].UpdateEditTimestamp(*msg.EditedTimestamp)
+		existing[0].UpdateEditTimestampAndMXID(*msg.EditedTimestamp, resp.EventID)
 	}
 	log.Debug().
 		Str("event_id", resp.EventID.String()).
@@ -1491,13 +1491,28 @@ var linkRegex = regexp.MustCompile(`https?:\/\/[-a-zA-Z0-9()@:%_\+.~#?&//=]+`)
 func (portal *Portal) convertReplyMessageToPrefix(replyTo *database.Message) (string, error) {
 	url := fmt.Sprintf("https://discord.com/channels/%s/%s/%s", portal.GuildID, portal.Key.ChannelID, replyTo.DiscordID)
 
-	evt, err := portal.getEvent(replyTo.MXID)
+	// if the message was edited, use the newer mxid
+	replyToMXID := replyTo.ReplacedByMXID
+	if replyToMXID == "" {
+		replyToMXID = replyTo.MXID
+	}
+
+	evt, err := portal.getEvent(replyToMXID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get reply target event: %w", err)
 	}
-	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
+
+	content := evt.Content.AsMessage().NewContent
+	ok := true
+	if content == nil {
+		content, ok = evt.Content.Parsed.(*event.MessageEventContent)
+	}
+
 	if !ok {
 		return "", fmt.Errorf("unsupported event type %s / %T", evt.Type.String(), evt.Content.Parsed)
+	}
+	if content == nil {
+		return "", fmt.Errorf("message has no content: %s / %T", evt.Type.String(), evt.Content.Parsed)
 	}
 	content.RemoveReplyFallback()
 	var targetUser string
@@ -1626,7 +1641,6 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		discordContent, allowedMentions := portal.parseMatrixHTML(content.NewContent, evt.RoomID, parseAllowedLinkPreviews(newContentRaw))
 		var err error
 		var msg *discordgo.Message
-		// TODO save edit in message table
 		if !isWebhookSend {
 			msg, err = sess.ChannelMessageEdit(edits.DiscordProtoChannelID(), edits.DiscordID, discordContent)
 		} else {
@@ -1649,7 +1663,7 @@ func (portal *Portal) handleMatrixMessage(sender *User, evt *event.Event) {
 		}
 		go portal.sendMessageMetrics(evt, err, "Failed to edit")
 		if msg != nil && msg.EditedTimestamp != nil {
-			edits.UpdateEditTimestamp(*msg.EditedTimestamp)
+			edits.UpdateEditTimestampAndMXID(*msg.EditedTimestamp, evt.ID)
 		}
 		return
 	} else if threadRoot := content.GetRelatesTo().GetThreadParent(); threadRoot != "" {
